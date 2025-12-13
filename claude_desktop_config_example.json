@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "code-learning": {
+      "command": "uv",
+      "args": [
+        "run",
+        "F:\\Code\\hana-learncode\\main.py"
+      ]
+    }
+  }
+}
+

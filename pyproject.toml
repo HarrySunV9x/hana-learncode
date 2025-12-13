@@ -1,0 +1,14 @@
+[project]
+name = "hana-learncode"
+version = "0.1.0"
+description = "MCP Server for code learning and analysis"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp[cli]>=1.24.0",
+    "tree-sitter>=0.23.2",
+    "tree-sitter-c>=0.23.5",
+    "tree-sitter-python>=0.23.6",
+    "pygments>=2.18.0",
+    "pathspec>=0.12.1",
+]
