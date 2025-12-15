@@ -1,251 +1,176 @@
-# Hana LearnCode - 代码学习助手 MCP Server
+# 基本用法
+mcp 服务器文件结构
 
-一个专门用于帮助学习和理解代码的 MCP (Model Context Protocol) 服务器。通过自动索引、分析代码库，追踪函数调用流程，并生成可视化流程图，帮助你深入理解复杂代码的工作原理。
+```python
+"""
+FastMCP quickstart example.
 
-## 功能特性
+Run from the repository root:
+    uv run examples/snippets/servers/fastmcp_quickstart.py
+"""
 
-🔍 **代码仓库扫描与索引**
-- 支持多种编程语言（C/C++, Python, Java, JavaScript 等）
-- 自动提取函数、类、结构体定义
-- 智能忽略无关文件和目录
+from mcp.server.fastmcp import FastMCP
 
-📊 **函数调用流程追踪**
-- 追踪函数调用链路
-- 分析函数调用深度和关系
-- 查找函数之间的调用路径
+# Create an MCP server
+mcp = FastMCP("Demo", json_response=True)
 
-🎨 **流程图生成**
-- 自动生成 Mermaid 格式的流程图
-- 支持调用树、概念图、路径图等多种类型
-- 可在 Markdown 中直接渲染
 
-🧠 **概念学习助手**
-- 基于关键字搜索相关代码
-- 分析特定主题的实现（如内存分配、线程管理等）
-- 提供代码片段和位置信息
+# Add an addition tool
+@mcp.tool()
+def add(a: int, b: int) -> int:
+    """Add two numbers"""
+    return a + b
 
-## 安装
 
-1. 克隆或下载此项目
+# Add a dynamic greeting resource
+@mcp.resource("greeting://{name}")
+def get_greeting(name: str) -> str:
+    """Get a personalized greeting"""
+    return f"Hello, {name}!"
 
-2. 安装依赖（使用 uv）：
 
-```bash
-uv sync
-```
-
-或者使用 pip：
-
-```bash
-pip install -e .
-```
-
-## 使用方法
-
-### 1. 启动 MCP Server
-
-```bash
-uv run main.py
-```
-
-或者：
-
-```bash
-python main.py
-```
-
-### 2. 配置 MCP 客户端
-
-在你的 MCP 客户端（如 Claude Desktop）配置文件中添加：
-
-```json
-{
-  "mcpServers": {
-    "code-learning": {
-      "command": "uv",
-      "args": ["run", "F:\\Code\\hana-learncode\\main.py"]
+# Add a prompt
+@mcp.prompt()
+def greet_user(name: str, style: str = "friendly") -> str:
+    """Generate a greeting prompt"""
+    styles = {
+        "friendly": "Please write a warm, friendly greeting",
+        "formal": "Please write a formal, professional greeting",
+        "casual": "Please write a casual, relaxed greeting",
     }
-  }
-}
+
+    return f"{styles.get(style, styles['friendly'])} for someone named {name}."
+
+
+# Run with streamable HTTP transport
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http")
 ```
 
-### 3. 使用工具
+@mcp.resource("greeting://{name}")
 
-服务器提供以下工具：
+- 提供静态或动态的数据资源（如文件、配置、数据等）
 
-#### `scan_code_repository`
-扫描并索引代码仓库
+- AI 可以读取但不能修改，只读访问
 
-**参数：**
-- `repo_path`: 代码仓库的本地路径
-- `extensions`: (可选) 要扫描的文件扩展名，用逗号分隔
+- 使用 URI 模式定义资源路径（支持参数化）
 
-**示例：**
-```
-扫描 Linux kernel 源码：
-repo_path: /path/to/linux
-extensions: .c,.h
-```
+- 返回的是资源内容/数据，供 AI 引用和使用
 
-#### `search_functions`
-搜索包含关键字的函数
+- 常用于：文档内容、配置数据、数据库记录、文件内容等
 
-**参数：**
-- `repo_path`: 代码仓库路径
-- `keyword`: 搜索关键字
+@mcp.tool()
 
-**示例：**
-```
-搜索所有包含 "alloc" 的函数
-```
+- 根据prompt，AI 自动决定何时调用
 
-#### `trace_function_flow`
-追踪函数调用流程
+- 用于执行具体任务（查询、计算、分析等）
 
-**参数：**
-- `repo_path`: 代码仓库路径
-- `function_name`: 要追踪的函数名
-- `max_depth`: 追踪深度（默认3）
+- 返回数据或结果
 
-**示例：**
-```
-追踪 kmalloc 函数的调用流程
-```
+@mcp.prompt()
 
-#### `analyze_code_concept`
-分析特定概念相关的代码
+- 用户手动选择使用，在cursor中，输入/可见
 
-**参数：**
-- `repo_path`: 代码仓库路径
-- `concept`: 概念名称
-- `keywords`: 相关关键字，用逗号分隔
+- 返回的是提示词文本，不是执行结果
 
-**示例：**
-```
-concept: "内存分配"
-keywords: "kmalloc,vmalloc,alloc_pages"
-```
+- 用于引导 AI 完成特定任务
 
-#### `get_function_code`
-获取完整的函数源代码
+具体见：
 
-**参数：**
-- `repo_path`: 代码仓库路径
-- `function_name`: 函数名
+https://github.com/modelcontextprotocol/python-sdk
 
-#### `generate_flowchart`
-生成函数调用流程图
+# 实战：MCP 工具设计
 
-**参数：**
-- `repo_path`: 代码仓库路径
-- `function_name`: 函数名
-- `chart_type`: 图表类型（默认 call_tree）
-- `max_depth`: 追踪深度（默认3）
-- `direction`: 图的方向（TD=上到下，LR=左到右）
+在设计 MCP 工具时，根据任务的复杂度和对 AI 自主性的要求，主要有三种设计模式：
 
-#### `generate_concept_flowchart`
-生成概念相关的流程图
+## 指导文档
 
-**参数：**
-- `repo_path`: 代码仓库路径
-- `concept`: 概念名称
-- `keywords`: 相关关键字，用逗号分隔
-- `direction`: 图的方向
-
-#### `find_function_path`
-查找函数之间的调用路径
-
-**参数：**
-- `repo_path`: 代码仓库路径
-- `from_function`: 起始函数名
-- `to_function`: 目标函数名
-- `max_depth`: 最大搜索深度（默认10）
-
-## 使用场景示例
-
-### 场景 1: 学习 Linux Kernel 内存分配原理
-
-```
-提问：我想了解 Linux kernel 内存分配的原理，能通过源码告诉我整个过程吗？并生成流程图
-
-步骤：
-1. scan_code_repository(repo_path="/path/to/linux", extensions=".c,.h")
-2. analyze_code_concept(repo_path="/path/to/linux", concept="内存分配", keywords="kmalloc,vmalloc,alloc_pages,__get_free_pages")
-3. trace_function_flow(repo_path="/path/to/linux", function_name="kmalloc", max_depth=4)
-4. generate_flowchart(repo_path="/path/to/linux", function_name="kmalloc", max_depth=3)
-5. get_function_code(repo_path="/path/to/linux", function_name="kmalloc")
+```python
+@mcp.tool()
+def analyze_performance() -> str:
+    """性能分析指导工具"""
+    return '''
+    # 性能分析流程
+    
+    ## 第一步：收集日志
+    使用 search_events_files 工具搜索事件日志...
+    
+    ## 第二步：提取关键数据
+    使用 find_keyword_logs 工具提取关键字...
+    
+    ## 第三步：生成报告
+    调用 generate_report 工具生成分析报告...
+    '''
 ```
 
-### 场景 2: 理解项目中的某个功能模块
+根据一整篇指导文档执行步骤。
 
+**优点：**
+
+- 工具编写简单，提供完整的操作指导并接入mcp即可
+- 维护方便，一个文档管理所有步骤
+
+**缺点：**
+- 上下文冗长，AI 容易遗漏、跳过、自我联想执行步骤，越靠后越难以控制
+- 无法存储过程中的状态，不好追溯
+
+## 工作流
+
+```python
+@mcp.tool()
+def init_scene_workflow(log_path: str, timestamp: str, time_window: float = 20.0) -> str:
+    """【步骤 1/6】初始化场景分析工作流"""
+    workflow_id = f"workflow_{int(time.time())}"
+    workflows[workflow_id] = {
+        "current_step": 1,
+        "log_path": log_path,
+        "timestamp": timestamp,
+        "time_window": time_window,
+        "status": "initialized"
+    }
+    return json.dumps({
+        "workflow_id": workflow_id,
+        "next_step": "调用 search_events 工具继续",
+        "status": "success"
+    })
+
+@mcp.tool()
+def search_events(workflow_id: str) -> str:
+    """【步骤 2/6】搜索 Events 日志文件"""
+    workflow = workflows.get(workflow_id)
+    if not workflow:
+        return json.dumps({"error": "工作流不存在"})
+    
+    # 执行搜索逻辑
+    events_files = search_events_in_path(workflow["log_path"])
+    
+    # 更新状态
+    workflow["current_step"] = 2
+    workflow["events_files"] = events_files
+    
+    return json.dumps({
+        "status": "success",
+        "found_files": len(events_files),
+        "next_step": "调用 extract_logs 工具继续"
+    })
+
+……
 ```
-提问：这个项目的用户认证是如何实现的？
 
-步骤：
-1. scan_code_repository(repo_path="/path/to/project")
-2. search_functions(repo_path="/path/to/project", keyword="auth")
-3. trace_function_flow(repo_path="/path/to/project", function_name="authenticate_user")
-4. generate_concept_flowchart(repo_path="/path/to/project", concept="用户认证", keywords="auth,login,verify")
-```
+**优点：**
+- AI 可按规定步骤执行，可控性强
+- 各步骤均可按设计调节，结果可记录，灵活性强
+- 每步职责单一，易于测试和调试
 
-### 场景 3: 查找函数调用关系
+**缺点：**
+- AI自主性低，设计要求难
+- 多步骤维护，拓展性有，但维护起来很困难
 
-```
-提问：main 函数是如何调用到 process_data 函数的？
+- AI是否自主分析可能难以把控
 
-步骤：
-1. find_function_path(repo_path="/path/to/project", from_function="main", to_function="process_data")
-```
+**自主分析控制**
 
-## 支持的编程语言
+search_event 得到日志结果，如果想要AI自主分析，可能需要特别的返回值说明。
 
-- C/C++ (.c, .h, .cpp, .hpp)
-- Python (.py)
-- Java (.java)
-- JavaScript/TypeScript (.js, .ts)
+例：
 
-## 技术栈
-
-- **FastMCP**: MCP 服务器框架
-- **Python 3.13+**: 开发语言
-- **正则表达式**: 代码解析
-- **Mermaid**: 流程图生成
-
-## 项目结构
-
-```
-hana-learncode/
-├── core/                    # 核心功能模块
-│   ├── code_indexer.py     # 代码索引器
-│   ├── code_analyzer.py    # 代码分析器
-│   └── flowchart_generator.py  # 流程图生成器
-├── tool/                    # MCP 工具定义
-│   └── create_tool.py      # 工具注册
-├── main.py                  # MCP 服务器入口
-├── pyproject.toml          # 项目配置
-└── README.md               # 说明文档
-```
-
-## 注意事项
-
-1. 首次使用时需要先扫描代码仓库建立索引
-2. 大型代码库（如 Linux kernel）的扫描可能需要较长时间
-3. 流程图复杂度受 `max_depth` 参数控制，建议从小值开始
-4. 目前使用正则表达式进行代码解析，对于复杂语法可能不够准确
-
-## 未来计划
-
-- [ ] 集成 Tree-sitter 进行更准确的语法解析
-- [ ] 支持更多编程语言
-- [ ] 添加代码复杂度分析
-- [ ] 支持增量索引
-- [ ] 添加代码搜索和相似度分析
-- [ ] 生成更丰富的可视化图表
-
-## 许可证
-
-MIT
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
