@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Dict, Optional
 import time
 
-from .base_step import BaseStep
+from .step.base_step import BaseStep
 
 class WorkflowStatus(Enum):
     """ 工作流状态 """

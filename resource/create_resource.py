@@ -13,15 +13,7 @@ def register_resources(mcp):
         mcp: FastMCP 实例
     """
     
-    @mcp.resource("weather://beijing")
-    def beijing_weather() -> str:
-        """北京的天气数据"""
-        return "北京：25°C，晴天，空气质量：良"
-    
-    # 可以在这里添加更多 resource 定义
-    # 例如：
-    # @mcp.resource("config://{name}")
-    # def get_config(name: str) -> str:
-    #     """获取配置数据"""
-    #     return config_data
-
+    @mcp.resource("resource://example")
+    def resorce_example() -> str:
+        """资源示例"""
+        return "资源示例"

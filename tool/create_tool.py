@@ -5,14 +5,13 @@ import json
 from core.code_indexer import CodeIndexer
 from core.code_analyzer import CodeAnalyzer
 from core.flowchart_generator import FlowchartGenerator
-from workflow.workflow_manager import workflow_manager
-from workflow.workflow_steps import (
-    ScanRepositoryStep,
-    SearchFunctionsStep,
-    TraceFunctionFlowStep,
-    AnalyzeConceptStep,
-    GenerateFlowchartStep
-)
+from workflow.workflow_control import Workflow
+from workflow.workflow_steps import learn_code_steps
+from workflow.step.scan_repository import ScanRepository
+from workflow.step.search_functions import SearchFunctions
+from workflow.step.trace_function_flow import TraceFunctionFlow
+from workflow.step.analyze_concept import AnalyzeConcept
+from workflow.step.generate_flowchart import GenerateFlowchart
 
 # 全局实例
 indexers = {}  # repo_path -> CodeIndexer
@@ -447,7 +446,7 @@ def register_tools(mcp):
             工作流ID和创建信息
         """
         try:
-            workflow_id = workflow_manager.create_workflow(workflow_name, workflow_description)
+            workflow_id = Workflow.create_workflow(workflow_name, workflow_description)
             
             result = {
                 "status": "success",
@@ -497,26 +496,26 @@ def register_tools(mcp):
             
             # 根据步骤类型创建对应的步骤实例
             if step_type == "scan_repository":
-                step = ScanRepositoryStep(
+                step = ScanRepository(
                     repo_path=params.get("repo_path"),
                     extensions=params.get("extensions")
                 )
             elif step_type == "search_functions":
-                step = SearchFunctionsStep(
+                step = SearchFunctions(
                     keyword=params.get("keyword")
                 )
             elif step_type == "trace_function_flow":
-                step = TraceFunctionFlowStep(
+                step = TraceFunctionFlow(
                     function_name=params.get("function_name"),
                     max_depth=params.get("max_depth", 3)
                 )
             elif step_type == "analyze_concept":
-                step = AnalyzeConceptStep(
+                step = AnalyzeConcept(
                     concept=params.get("concept"),
                     keywords=params.get("keywords", [])
                 )
             elif step_type == "generate_flowchart":
-                step = GenerateFlowchartStep(
+                step = GenerateFlowchart(
                     function_name=params.get("function_name"),
                     concept=params.get("concept"),
                     max_depth=params.get("max_depth", 3),
@@ -529,7 +528,7 @@ def register_tools(mcp):
                 }, ensure_ascii=False, indent=2)
             
             # 添加步骤
-            result = workflow_manager.add_step(workflow_id, step)
+            result = Workflow.add_step(workflow_id, step)
             
             return json.dumps(result, ensure_ascii=False, indent=2)
         
@@ -558,7 +557,7 @@ def register_tools(mcp):
             步骤执行结果
         """
         try:
-            result = workflow_manager.execute_next_step(workflow_id)
+            result = Workflow.execute_next_step(workflow_id)
             return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:
@@ -581,7 +580,7 @@ def register_tools(mcp):
             所有步骤的执行结果
         """
         try:
-            result = workflow_manager.execute_all_steps(workflow_id)
+            result = Workflow.execute_all_steps(workflow_id)
             return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:
@@ -604,7 +603,7 @@ def register_tools(mcp):
             工作流状态信息
         """
         try:
-            result = workflow_manager.get_workflow_status(workflow_id)
+            result = Workflow.get_workflow_status(workflow_id)
             return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:
@@ -627,7 +626,7 @@ def register_tools(mcp):
             工作流上下文信息
         """
         try:
-            result = workflow_manager.get_workflow_context(workflow_id)
+            result = Workflow.get_workflow_context(workflow_id)
             return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:
@@ -645,7 +644,7 @@ def register_tools(mcp):
             所有工作流的列表
         """
         try:
-            result = workflow_manager.list_workflows()
+            result = Workflow.list_workflows()
             return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:
@@ -668,7 +667,7 @@ def register_tools(mcp):
             删除结果
         """
         try:
-            result = workflow_manager.delete_workflow(workflow_id)
+            result = Workflow.delete_workflow(workflow_id)
             return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:
@@ -691,7 +690,7 @@ def register_tools(mcp):
             操作结果
         """
         try:
-            result = workflow_manager.pause_workflow(workflow_id)
+            result = Workflow.pause_workflow(workflow_id)
             return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:
@@ -714,7 +713,7 @@ def register_tools(mcp):
             操作结果
         """
         try:
-            result = workflow_manager.resume_workflow(workflow_id)
+            result = Workflow.resume_workflow(workflow_id)
             return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:

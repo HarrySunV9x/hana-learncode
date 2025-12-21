@@ -15,14 +15,11 @@ def register_prompts(mcp):
     """
     
     @mcp.prompt()
-    def weather_report(city: str) -> str:
-        """生成天气播报任务"""
-        return f"请扮演气象主播，用专业且生动的语言播报{city}的天气情况，包括温度、天气状况和出行建议。"
-    
-    # 可以在这里添加更多 prompt 定义
-    # 例如：
-    # @mcp.prompt()
-    # def code_review_prompt(file_path: str) -> str:
-    #     """代码审查提示词"""
-    #     return f"请审查以下代码文件：{file_path}，重点关注代码质量、性能和安全性。"
+    def learn_code(code_path: str, learn_context: str) -> str:
+        """学习代码"""
+        return f"帮我学习代码，我想学习{learn_context}，代码文件：{code_path}"
 
+    @mcp.prompt()
+    def learn_code_for_kernel(learn_context: str) -> str:
+        """学习内核代码上下文"""
+        return f"帮我学习内核代码，我想学习{learn_context}，内核代码地址：F:/Code/kernel/common"
