@@ -1,723 +1,439 @@
 from typing import List, Optional
 from pathlib import Path
 import json
+import uuid
 
 from core.code_indexer import CodeIndexer
 from core.code_analyzer import CodeAnalyzer
 from core.flowchart_generator import FlowchartGenerator
-from workflow.workflow_control import Workflow
-from workflow.workflow_steps import learn_code_steps
-from workflow.step.scan_repository import ScanRepository
-from workflow.step.search_functions import SearchFunctions
-from workflow.step.trace_function_flow import TraceFunctionFlow
-from workflow.step.analyze_concept import AnalyzeConcept
-from workflow.step.generate_flowchart import GenerateFlowchart
 
-# 全局实例
-indexers = {}  # repo_path -> CodeIndexer
-analyzers = {}  # repo_path -> CodeAnalyzer
+# 导入步骤类
+from workflow.step.scan_repository import ScanRepositoryStep
+from workflow.step.search_functions import SearchFunctionsStep
+from workflow.step.trace_function_flow import TraceFunctionFlowStep
+from workflow.step.analyze_concept import AnalyzeConceptStep
+from workflow.step.generate_flowchart import GenerateFlowchartStep
 
-
-def get_or_create_indexer(repo_path: str) -> tuple[CodeIndexer, CodeAnalyzer]:
-    """获取或创建代码索引器和分析器"""
-    if repo_path not in indexers:
-        indexers[repo_path] = CodeIndexer(repo_path)
-        analyzers[repo_path] = CodeAnalyzer(indexers[repo_path])
-    return indexers[repo_path], analyzers[repo_path]
+# 全局上下文 - 用于在多个工具调用之间传递数据
+# session_id -> context
+sessions = {}
 
 
+def get_or_create_session(session_id: Optional[str] = None) -> tuple[str, dict]:
+    """获取或创建会话上下文"""
+    if session_id and session_id in sessions:
+        return session_id, sessions[session_id]
+    
+    # 创建新会话
+    new_session_id = f"session_{uuid.uuid4().hex[:8]}"
+    sessions[new_session_id] = {}
+    return new_session_id, sessions[new_session_id]
+
+# TODO: 当前步骤未基于base_step实现，后续需要修改
 def register_tools(mcp):
-    """注册所有工具到 MCP 服务器"""
+    """注册所有工具到 MCP 服务器 - 每个工具对应一个具体步骤"""
     
     @mcp.tool()
-    async def scan_code_repository(
+    async def scan_repository(
         repo_path: str,
+        session_id: Optional[str] = None,
         extensions: Optional[str] = None
     ) -> str:
         """
-        扫描代码仓库，建立索引
+        扫描代码仓库并建立索引
         
         Args:
-            repo_path: 代码仓库的本地路径
-            extensions: 要扫描的文件扩展名，用逗号分隔（如 ".c,.h,.py"）。不指定则使用默认扩展名
+            repo_path: 代码仓库路径
+            session_id: 会话ID（可选，用于多步骤操作）
+            extensions: 要扫描的文件扩展名，逗号分隔（可选，如：.py,.js,.go）
         
         Returns:
-            扫描结果的 JSON 字符串
+            扫描结果
         """
         try:
-            indexer, analyzer = get_or_create_indexer(repo_path)
+            # 获取或创建会话
+            sid, context = get_or_create_session(session_id)
             
             # 解析扩展名
             ext_list = None
             if extensions:
-                ext_list = [ext.strip() if ext.strip().startswith('.') else f'.{ext.strip()}' 
-                           for ext in extensions.split(',')]
+                ext_list = [ext.strip() for ext in extensions.split(",")]
             
-            # 扫描仓库
-            scan_result = indexer.scan_repository(ext_list)
+            # 创建并执行步骤
+            step = ScanRepositoryStep(None, repo_path, ext_list)
+            result = step.execute(context)
             
-            # 索引所有文件
-            index_result = indexer.index_all_files()
+            # 保存上下文
+            sessions[sid] = context
             
-            result = {
-                "status": "success",
-                "repo_path": repo_path,
-                "scan": scan_result,
-                "index": index_result,
-                "message": f"成功扫描 {scan_result['total_files']} 个文件，索引了 {index_result['total_functions']} 个函数"
-            }
-            
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
+            if result.success:
+                scan_data = result.data
+                return f"""═══════════════════════════════════════════
+📁 扫描仓库成功
+═══════════════════════════════════════════
+
+✅ {result.message}
+
+📊 统计信息：
+  • 文件总数: {scan_data.get('total_files', 0)}
+  • 函数总数: {scan_data.get('total_functions', 0)}
+  • 结构体/类总数: {scan_data.get('total_structs', 0)}
+  • 文件类型: {scan_data.get('extensions', {})}
+
+🔖 会话ID: {sid}
+  （后续步骤请使用此ID）
+
+═══════════════════════════════════════════"""
+            else:
+                return f"❌ {result.message}"
+                
         except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
+            return f"❌ 扫描仓库失败：{str(e)}"
     
     @mcp.tool()
     async def search_functions(
-        repo_path: str,
-        keyword: str
+        session_id: str,
+        keyword: Optional[str] = None
     ) -> str:
         """
-        在代码库中搜索包含关键字的函数
+        搜索函数（需要先执行 scan_repository）
         
         Args:
-            repo_path: 代码仓库路径
-            keyword: 搜索关键字
+            session_id: 会话ID
+            keyword: 搜索关键词（可选，不指定则返回所有函数）
         
         Returns:
-            搜索结果的 JSON 字符串
+            搜索结果
         """
         try:
-            indexer, analyzer = get_or_create_indexer(repo_path)
+            # 获取会话
+            if session_id not in sessions:
+                return f"❌ 会话不存在：{session_id}\n请先执行 scan_repository"
             
-            if not indexer.files:
-                return json.dumps({
-                    "status": "error",
-                    "error": "请先使用 scan_code_repository 扫描仓库"
-                }, ensure_ascii=False, indent=2)
+            context = sessions[session_id]
             
-            functions = indexer.search_function(keyword)
+            # 创建并执行步骤
+            step = SearchFunctionsStep(None, keyword)
+            result = step.execute(context)
             
-            result = {
-                "status": "success",
-                "keyword": keyword,
-                "total_found": len(functions),
-                "functions": functions[:50]  # 限制返回数量
-            }
+            # 保存上下文
+            sessions[session_id] = context
             
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
+            if result.success:
+                data = result.data
+                funcs = context.get("found_functions", [])
+                
+                output = f"""═══════════════════════════════════════════
+🔍 搜索函数成功
+═══════════════════════════════════════════
+
+✅ {result.message}
+
+📋 找到的函数：
+"""
+                for i, func in enumerate(funcs[:20], 1):
+                    output += f"  {i}. {func['name']} ({func.get('file', 'unknown')}:{func.get('line', 0)})\n"
+                
+                if len(funcs) > 20:
+                    output += f"\n... 还有 {len(funcs) - 20} 个函数未显示\n"
+                
+                output += f"\n🔖 会话ID: {session_id}\n"
+                output += "\n═══════════════════════════════════════════"
+                
+                return output
+            else:
+                return f"❌ {result.message}"
+                
         except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
+            return f"❌ 搜索函数失败：{str(e)}"
     
     @mcp.tool()
     async def trace_function_flow(
-        repo_path: str,
-        function_name: str,
+        session_id: str,
+        function_name: Optional[str] = None,
         max_depth: int = 3
     ) -> str:
         """
-        追踪函数调用流程，显示该函数调用了哪些其他函数
+        追踪函数调用流程（需要先执行 scan_repository）
         
         Args:
-            repo_path: 代码仓库路径
-            function_name: 要追踪的函数名
-            max_depth: 追踪深度（默认3层）
+            session_id: 会话ID
+            function_name: 函数名（可选，不指定则使用搜索结果的第一个函数）
+            max_depth: 最大追踪深度（默认3层）
         
         Returns:
-            函数调用树的 JSON 字符串
+            追踪结果
         """
         try:
-            indexer, analyzer = get_or_create_indexer(repo_path)
+            # 获取会话
+            if session_id not in sessions:
+                return f"❌ 会话不存在：{session_id}\n请先执行 scan_repository"
             
-            if not indexer.files:
-                return json.dumps({
-                    "status": "error",
-                    "error": "请先使用 scan_code_repository 扫描仓库"
-                }, ensure_ascii=False, indent=2)
+            context = sessions[session_id]
             
-            flow = analyzer.trace_function_flow(function_name, max_depth)
+            # 创建并执行步骤
+            step = TraceFunctionFlowStep(None, function_name, max_depth)
+            result = step.execute(context)
             
-            if "error" in flow:
-                return json.dumps({
-                    "status": "error",
-                    "error": flow["error"]
-                }, ensure_ascii=False, indent=2)
+            # 保存上下文
+            sessions[session_id] = context
             
-            result = {
-                "status": "success",
-                "flow": flow
-            }
-            
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
+            if result.success:
+                data = result.data
+                return f"""═══════════════════════════════════════════
+🔄 追踪函数流程成功
+═══════════════════════════════════════════
+
+✅ {result.message}
+
+📍 函数信息：
+  • 函数名: {data.get('function', '')}
+  • 文件: {data.get('file', '')}
+  • 行号: {data.get('line', 0)}
+  • 追踪深度: {data.get('depth', 0)}
+
+🔖 会话ID: {session_id}
+
+💡 提示：使用 generate_flowchart 生成可视化流程图
+
+═══════════════════════════════════════════"""
+            else:
+                return f"❌ {result.message}"
+                
         except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
+            return f"❌ 追踪函数流程失败：{str(e)}"
     
     @mcp.tool()
-    async def analyze_code_concept(
-        repo_path: str,
+    async def analyze_concept(
+        session_id: str,
         concept: str,
         keywords: str
     ) -> str:
         """
-        分析特定概念相关的代码，帮助学习某个主题
+        分析代码概念（需要先执行 scan_repository）
         
         Args:
-            repo_path: 代码仓库路径
-            concept: 概念名称（如 "内存分配"）
-            keywords: 相关关键字，用逗号分隔（如 "malloc,alloc,kmalloc"）
+            session_id: 会话ID
+            concept: 概念名称
+            keywords: 关键词，逗号分隔（如：init,setup,configure）
         
         Returns:
-            分析结果的 JSON 字符串
+            分析结果
         """
         try:
-            indexer, analyzer = get_or_create_indexer(repo_path)
+            # 获取会话
+            if session_id not in sessions:
+                return f"❌ 会话不存在：{session_id}\n请先执行 scan_repository"
             
-            if not indexer.files:
-                return json.dumps({
-                    "status": "error",
-                    "error": "请先使用 scan_code_repository 扫描仓库"
-                }, ensure_ascii=False, indent=2)
+            context = sessions[session_id]
             
-            keyword_list = [kw.strip() for kw in keywords.split(',')]
-            analysis = analyzer.analyze_concept(concept, keyword_list)
+            # 解析关键词
+            keyword_list = [kw.strip() for kw in keywords.split(",")]
             
-            result = {
-                "status": "success",
-                "analysis": analysis
-            }
+            # 创建并执行步骤
+            step = AnalyzeConceptStep(None, concept, keyword_list)
+            result = step.execute(context)
             
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
+            # 保存上下文
+            sessions[session_id] = context
+            
+            if result.success:
+                data = result.data
+                return f"""═══════════════════════════════════════════
+💡 概念分析成功
+═══════════════════════════════════════════
+
+✅ {result.message}
+
+📊 分析结果：
+  • 概念: {data.get('concept', '')}
+  • 关键词: {data.get('keywords', [])}
+  • 相关函数数: {data.get('total_functions', 0)}
+
+🔖 会话ID: {session_id}
+
+💡 提示：使用 generate_flowchart 生成概念流程图
+
+═══════════════════════════════════════════"""
+            else:
+                return f"❌ {result.message}"
+                
         except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def get_function_code(
-        repo_path: str,
-        function_name: str
-    ) -> str:
-        """
-        获取完整的函数源代码
-        
-        Args:
-            repo_path: 代码仓库路径
-            function_name: 函数名
-        
-        Returns:
-            函数代码的 JSON 字符串
-        """
-        try:
-            indexer, analyzer = get_or_create_indexer(repo_path)
-            
-            if not indexer.files:
-                return json.dumps({
-                    "status": "error",
-                    "error": "请先使用 scan_code_repository 扫描仓库"
-                }, ensure_ascii=False, indent=2)
-            
-            code = analyzer.extract_function_code(function_name)
-            
-            if not code:
-                return json.dumps({
-                    "status": "error",
-                    "error": f"未找到函数: {function_name}"
-                }, ensure_ascii=False, indent=2)
-            
-            result = {
-                "status": "success",
-                "function_code": code
-            }
-            
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
+            return f"❌ 分析概念失败：{str(e)}"
     
     @mcp.tool()
     async def generate_flowchart(
-        repo_path: str,
-        function_name: str,
-        chart_type: str = "call_tree",
-        max_depth: int = 3,
+        session_id: str,
+        chart_type: Optional[str] = None,
         direction: str = "TD"
     ) -> str:
         """
-        生成函数调用流程图（Mermaid 格式）
+        生成流程图（需要先执行 trace_function_flow 或 analyze_concept）
         
         Args:
-            repo_path: 代码仓库路径
-            function_name: 函数名
-            chart_type: 图表类型（call_tree=调用树）
-            max_depth: 追踪深度
-            direction: 图的方向（TD=上到下，LR=左到右）
+            session_id: 会话ID
+            chart_type: 图表类型（call_tree=函数调用树, concept=概念图，可选，自动检测）
+            direction: 方向（TD=上到下, LR=左到右）
         
         Returns:
-            Mermaid 格式的流程图代码
+            流程图（Mermaid格式）
         """
         try:
-            indexer, analyzer = get_or_create_indexer(repo_path)
+            # 获取会话
+            if session_id not in sessions:
+                return f"❌ 会话不存在：{session_id}\n请先执行相应的分析步骤"
             
-            if not indexer.files:
-                return json.dumps({
-                    "status": "error",
-                    "error": "请先使用 scan_code_repository 扫描仓库"
-                }, ensure_ascii=False, indent=2)
+            context = sessions[session_id]
             
-            generator = FlowchartGenerator()
+            # 创建并执行步骤
+            step = GenerateFlowchartStep(None, chart_type or "call_tree", direction)
+            result = step.execute(context)
             
-            if chart_type == "call_tree":
-                # 获取调用树
-                flow = analyzer.trace_function_flow(function_name, max_depth)
+            # 保存上下文
+            sessions[session_id] = context
+            
+            if result.success:
+                flowchart = context.get("flowchart", "")
+                chart_info = context.get("chart_info", {})
                 
-                if "error" in flow:
-                    return json.dumps({
-                        "status": "error",
-                        "error": flow["error"]
-                    }, ensure_ascii=False, indent=2)
+                return f"""═══════════════════════════════════════════
+📊 生成流程图成功
+═══════════════════════════════════════════
+
+✅ {result.message}
+
+📈 流程图信息：
+  • 类型: {chart_info.get('type', 'unknown')}
+  • 格式: Mermaid
+  • 方向: {direction}
+
+```mermaid
+{flowchart}
+```
+
+🔖 会话ID: {session_id}
+
+═══════════════════════════════════════════"""
+            else:
+                return f"❌ {result.message}"
                 
-                # 生成流程图
-                flowchart = generator.generate_call_tree_flowchart(flow["call_tree"], direction)
-            else:
-                return json.dumps({
-                    "status": "error",
-                    "error": f"不支持的图表类型: {chart_type}"
-                }, ensure_ascii=False, indent=2)
-            
-            result = {
-                "status": "success",
-                "function": function_name,
-                "flowchart": flowchart,
-                "format": "mermaid"
-            }
-            
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
         except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
+            return f"❌ 生成流程图失败：{str(e)}"
     
     @mcp.tool()
-    async def generate_concept_flowchart(
-        repo_path: str,
-        concept: str,
-        keywords: str,
-        direction: str = "TD"
-    ) -> str:
+    async def list_sessions() -> str:
         """
-        生成概念相关的流程图，展示相关函数和它们的关系
+        列出所有会话
+        
+        Returns:
+            所有会话列表
+        """
+        if not sessions:
+            return "暂无会话"
+        
+        result = f"""═══════════════════════════════════════════
+📋 所有会话 (共 {len(sessions)} 个)
+═══════════════════════════════════════════
+
+"""
+        for sid, context in sessions.items():
+            has_indexer = "indexer" in context
+            has_flow = "function_flow" in context
+            has_concept = "concept_analysis" in context
+            has_chart = "flowchart" in context
+            
+            result += f"""
+会话ID: {sid}
+  • 已扫描: {'✓' if has_indexer else '✗'}
+  • 已追踪函数: {'✓' if has_flow else '✗'}
+  • 已分析概念: {'✓' if has_concept else '✗'}
+  • 已生成图表: {'✓' if has_chart else '✗'}
+---"""
+        
+        result += "\n═══════════════════════════════════════════"
+        
+        return result
+    
+    @mcp.tool()
+    async def get_session_info(session_id: str) -> str:
+        """
+        获取会话详细信息
         
         Args:
-            repo_path: 代码仓库路径
-            concept: 概念名称
-            keywords: 相关关键字，用逗号分隔
-            direction: 图的方向（TD=上到下，LR=左到右）
+            session_id: 会话ID
         
         Returns:
-            Mermaid 格式的流程图代码
+            会话信息
         """
-        try:
-            indexer, analyzer = get_or_create_indexer(repo_path)
-            
-            if not indexer.files:
-                return json.dumps({
-                    "status": "error",
-                    "error": "请先使用 scan_code_repository 扫描仓库"
-                }, ensure_ascii=False, indent=2)
-            
-            # 分析概念
-            keyword_list = [kw.strip() for kw in keywords.split(',')]
-            analysis = analyzer.analyze_concept(concept, keyword_list)
-            
-            # 生成流程图
-            generator = FlowchartGenerator()
-            flowchart = generator.generate_concept_flowchart(analysis, direction)
-            
-            result = {
-                "status": "success",
-                "concept": concept,
-                "flowchart": flowchart,
-                "format": "mermaid",
-                "total_functions": analysis["total_functions"]
-            }
-            
-            return json.dumps(result, ensure_ascii=False, indent=2)
+        if session_id not in sessions:
+            return f"❌ 会话不存在：{session_id}"
         
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def find_function_path(
-        repo_path: str,
-        from_function: str,
-        to_function: str,
-        max_depth: int = 10
-    ) -> str:
-        """
-        查找从一个函数到另一个函数的调用路径
+        context = sessions[session_id]
         
-        Args:
-            repo_path: 代码仓库路径
-            from_function: 起始函数名
-            to_function: 目标函数名
-            max_depth: 最大搜索深度
+        result = f"""═══════════════════════════════════════════
+📊 会话信息
+═══════════════════════════════════════════
+
+会话 ID: {session_id}
+
+"""
         
-        Returns:
-            调用路径的 JSON 字符串
-        """
-        try:
-            indexer, analyzer = get_or_create_indexer(repo_path)
-            
-            if not indexer.files:
-                return json.dumps({
-                    "status": "error",
-                    "error": "请先使用 scan_code_repository 扫描仓库"
-                }, ensure_ascii=False, indent=2)
-            
-            paths = analyzer.find_call_path(from_function, to_function, max_depth)
-            
-            if not paths:
-                return json.dumps({
-                    "status": "success",
-                    "from": from_function,
-                    "to": to_function,
-                    "paths": [],
-                    "message": "未找到调用路径"
-                }, ensure_ascii=False, indent=2)
-            
-            # 生成流程图
-            generator = FlowchartGenerator()
-            flowchart = generator.generate_function_path_flowchart(paths)
-            
-            result = {
-                "status": "success",
-                "from": from_function,
-                "to": to_function,
-                "total_paths": len(paths),
-                "paths": paths,
-                "flowchart": flowchart,
-                "format": "mermaid"
-            }
-            
-            return json.dumps(result, ensure_ascii=False, indent=2)
+        # 扫描结果
+        if "scan_result" in context:
+            scan = context["scan_result"]
+            result += f"""📁 扫描结果：
+  • 文件数: {scan.get('total_files', 0)}
+  • 扩展名: {scan.get('extensions', {})}
+
+"""
         
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    # ============== 工作流控制相关工具 ==============
-    
-    @mcp.tool()
-    async def create_workflow(
-        workflow_name: str,
-        workflow_description: str
-    ) -> str:
-        """
-        创建一个新的工作流
+        # 索引结果
+        if "index_result" in context:
+            index = context["index_result"]
+            result += f"""📑 索引结果：
+  • 函数数: {index.get('total_functions', 0)}
+  • 结构体/类数: {index.get('total_structs', 0)}
+
+"""
         
-        Args:
-            workflow_name: 工作流名称
-            workflow_description: 工作流描述
-            
-        Returns:
-            工作流ID和创建信息
-        """
-        try:
-            workflow_id = Workflow.create_workflow(workflow_name, workflow_description)
-            
-            result = {
-                "status": "success",
-                "workflow_id": workflow_id,
-                "workflow_name": workflow_name,
-                "workflow_description": workflow_description,
-                "message": "工作流创建成功，请使用 add_workflow_step 添加步骤"
-            }
-            
-            return json.dumps(result, ensure_ascii=False, indent=2)
+        # 搜索结果
+        if "found_functions" in context:
+            funcs = context["found_functions"]
+            result += f"""🔍 搜索结果：
+  • 找到函数数: {len(funcs)}
+
+"""
         
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def add_workflow_step(
-        workflow_id: str,
-        step_type: str,
-        step_params: str
-    ) -> str:
-        """
-        向工作流添加步骤
+        # 追踪结果
+        if "function_flow" in context:
+            flow = context["function_flow"]
+            result += f"""🔄 函数追踪：
+  • 函数: {flow.get('function', '')}
+  • 文件: {flow.get('file', '')}
+  • 行号: {flow.get('line', 0)}
+
+"""
         
-        Args:
-            workflow_id: 工作流ID
-            step_type: 步骤类型，可选值：
-                - scan_repository: 扫描代码仓库
-                - search_functions: 搜索函数
-                - trace_function_flow: 追踪函数调用
-                - analyze_concept: 分析代码概念
-                - generate_flowchart: 生成流程图
-            step_params: 步骤参数（JSON格式），例如：
-                - scan_repository: {"repo_path": "/path/to/repo", "extensions": ".c,.h"}
-                - search_functions: {"keyword": "malloc"}
-                - trace_function_flow: {"function_name": "main", "max_depth": 3}
-                - analyze_concept: {"concept": "内存分配", "keywords": ["malloc", "free"]}
-                - generate_flowchart: {"function_name": "main", "max_depth": 3, "direction": "TD"}
+        # 概念分析结果
+        if "concept_analysis" in context:
+            analysis = context["concept_analysis"]
+            result += f"""💡 概念分析：
+  • 概念: {analysis.get('concept', '')}
+  • 相关函数数: {analysis.get('total_functions', 0)}
+
+"""
         
-        Returns:
-            添加结果
-        """
-        try:
-            params = json.loads(step_params)
-            
-            # 根据步骤类型创建对应的步骤实例
-            if step_type == "scan_repository":
-                step = ScanRepository(
-                    repo_path=params.get("repo_path"),
-                    extensions=params.get("extensions")
-                )
-            elif step_type == "search_functions":
-                step = SearchFunctions(
-                    keyword=params.get("keyword")
-                )
-            elif step_type == "trace_function_flow":
-                step = TraceFunctionFlow(
-                    function_name=params.get("function_name"),
-                    max_depth=params.get("max_depth", 3)
-                )
-            elif step_type == "analyze_concept":
-                step = AnalyzeConcept(
-                    concept=params.get("concept"),
-                    keywords=params.get("keywords", [])
-                )
-            elif step_type == "generate_flowchart":
-                step = GenerateFlowchart(
-                    function_name=params.get("function_name"),
-                    concept=params.get("concept"),
-                    max_depth=params.get("max_depth", 3),
-                    direction=params.get("direction", "TD")
-                )
-            else:
-                return json.dumps({
-                    "status": "error",
-                    "error": f"不支持的步骤类型: {step_type}"
-                }, ensure_ascii=False, indent=2)
-            
-            # 添加步骤
-            result = Workflow.add_step(workflow_id, step)
-            
-            return json.dumps(result, ensure_ascii=False, indent=2)
+        # 流程图
+        if "flowchart" in context:
+            chart_info = context.get("chart_info", {})
+            flowchart = context["flowchart"]
+            result += f"""📊 流程图：
+  • 类型: {chart_info.get('type', 'unknown')}
+  • 格式: Mermaid
+  • 大小: {len(flowchart)} 字符
+
+"""
         
-        except json.JSONDecodeError as e:
-            return json.dumps({
-                "status": "error",
-                "error": f"参数解析失败: {str(e)}"
-            }, ensure_ascii=False, indent=2)
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def execute_workflow_step(
-        workflow_id: str
-    ) -> str:
-        """
-        执行工作流的下一个步骤
+        result += "═══════════════════════════════════════════"
         
-        Args:
-            workflow_id: 工作流ID
-            
-        Returns:
-            步骤执行结果
-        """
-        try:
-            result = Workflow.execute_next_step(workflow_id)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def execute_workflow_all(
-        workflow_id: str
-    ) -> str:
-        """
-        执行工作流的所有步骤
-        
-        Args:
-            workflow_id: 工作流ID
-            
-        Returns:
-            所有步骤的执行结果
-        """
-        try:
-            result = Workflow.execute_all_steps(workflow_id)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def get_workflow_status(
-        workflow_id: str
-    ) -> str:
-        """
-        获取工作流状态
-        
-        Args:
-            workflow_id: 工作流ID
-            
-        Returns:
-            工作流状态信息
-        """
-        try:
-            result = Workflow.get_workflow_status(workflow_id)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def get_workflow_context(
-        workflow_id: str
-    ) -> str:
-        """
-        获取工作流上下文数据
-        
-        Args:
-            workflow_id: 工作流ID
-            
-        Returns:
-            工作流上下文信息
-        """
-        try:
-            result = Workflow.get_workflow_context(workflow_id)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def list_workflows() -> str:
-        """
-        列出所有工作流
-        
-        Returns:
-            所有工作流的列表
-        """
-        try:
-            result = Workflow.list_workflows()
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def delete_workflow(
-        workflow_id: str
-    ) -> str:
-        """
-        删除工作流
-        
-        Args:
-            workflow_id: 工作流ID
-            
-        Returns:
-            删除结果
-        """
-        try:
-            result = Workflow.delete_workflow(workflow_id)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def pause_workflow(
-        workflow_id: str
-    ) -> str:
-        """
-        暂停工作流
-        
-        Args:
-            workflow_id: 工作流ID
-            
-        Returns:
-            操作结果
-        """
-        try:
-            result = Workflow.pause_workflow(workflow_id)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
-    
-    @mcp.tool()
-    async def resume_workflow(
-        workflow_id: str
-    ) -> str:
-        """
-        恢复工作流
-        
-        Args:
-            workflow_id: 工作流ID
-            
-        Returns:
-            操作结果
-        """
-        try:
-            result = Workflow.resume_workflow(workflow_id)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "error": str(e)
-            }, ensure_ascii=False, indent=2)
+        return result
