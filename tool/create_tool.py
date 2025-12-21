@@ -5,6 +5,14 @@ import json
 from core.code_indexer import CodeIndexer
 from core.code_analyzer import CodeAnalyzer
 from core.flowchart_generator import FlowchartGenerator
+from workflow.workflow_manager import workflow_manager
+from workflow.workflow_steps import (
+    ScanRepositoryStep,
+    SearchFunctionsStep,
+    TraceFunctionFlowStep,
+    AnalyzeConceptStep,
+    GenerateFlowchartStep
+)
 
 # 全局实例
 indexers = {}  # repo_path -> CodeIndexer
@@ -413,6 +421,300 @@ def register_tools(mcp):
                 "format": "mermaid"
             }
             
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    # ============== 工作流控制相关工具 ==============
+    
+    @mcp.tool()
+    async def create_workflow(
+        workflow_name: str,
+        workflow_description: str
+    ) -> str:
+        """
+        创建一个新的工作流
+        
+        Args:
+            workflow_name: 工作流名称
+            workflow_description: 工作流描述
+            
+        Returns:
+            工作流ID和创建信息
+        """
+        try:
+            workflow_id = workflow_manager.create_workflow(workflow_name, workflow_description)
+            
+            result = {
+                "status": "success",
+                "workflow_id": workflow_id,
+                "workflow_name": workflow_name,
+                "workflow_description": workflow_description,
+                "message": "工作流创建成功，请使用 add_workflow_step 添加步骤"
+            }
+            
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    @mcp.tool()
+    async def add_workflow_step(
+        workflow_id: str,
+        step_type: str,
+        step_params: str
+    ) -> str:
+        """
+        向工作流添加步骤
+        
+        Args:
+            workflow_id: 工作流ID
+            step_type: 步骤类型，可选值：
+                - scan_repository: 扫描代码仓库
+                - search_functions: 搜索函数
+                - trace_function_flow: 追踪函数调用
+                - analyze_concept: 分析代码概念
+                - generate_flowchart: 生成流程图
+            step_params: 步骤参数（JSON格式），例如：
+                - scan_repository: {"repo_path": "/path/to/repo", "extensions": ".c,.h"}
+                - search_functions: {"keyword": "malloc"}
+                - trace_function_flow: {"function_name": "main", "max_depth": 3}
+                - analyze_concept: {"concept": "内存分配", "keywords": ["malloc", "free"]}
+                - generate_flowchart: {"function_name": "main", "max_depth": 3, "direction": "TD"}
+        
+        Returns:
+            添加结果
+        """
+        try:
+            params = json.loads(step_params)
+            
+            # 根据步骤类型创建对应的步骤实例
+            if step_type == "scan_repository":
+                step = ScanRepositoryStep(
+                    repo_path=params.get("repo_path"),
+                    extensions=params.get("extensions")
+                )
+            elif step_type == "search_functions":
+                step = SearchFunctionsStep(
+                    keyword=params.get("keyword")
+                )
+            elif step_type == "trace_function_flow":
+                step = TraceFunctionFlowStep(
+                    function_name=params.get("function_name"),
+                    max_depth=params.get("max_depth", 3)
+                )
+            elif step_type == "analyze_concept":
+                step = AnalyzeConceptStep(
+                    concept=params.get("concept"),
+                    keywords=params.get("keywords", [])
+                )
+            elif step_type == "generate_flowchart":
+                step = GenerateFlowchartStep(
+                    function_name=params.get("function_name"),
+                    concept=params.get("concept"),
+                    max_depth=params.get("max_depth", 3),
+                    direction=params.get("direction", "TD")
+                )
+            else:
+                return json.dumps({
+                    "status": "error",
+                    "error": f"不支持的步骤类型: {step_type}"
+                }, ensure_ascii=False, indent=2)
+            
+            # 添加步骤
+            result = workflow_manager.add_step(workflow_id, step)
+            
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except json.JSONDecodeError as e:
+            return json.dumps({
+                "status": "error",
+                "error": f"参数解析失败: {str(e)}"
+            }, ensure_ascii=False, indent=2)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    @mcp.tool()
+    async def execute_workflow_step(
+        workflow_id: str
+    ) -> str:
+        """
+        执行工作流的下一个步骤
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            步骤执行结果
+        """
+        try:
+            result = workflow_manager.execute_next_step(workflow_id)
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    @mcp.tool()
+    async def execute_workflow_all(
+        workflow_id: str
+    ) -> str:
+        """
+        执行工作流的所有步骤
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            所有步骤的执行结果
+        """
+        try:
+            result = workflow_manager.execute_all_steps(workflow_id)
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    @mcp.tool()
+    async def get_workflow_status(
+        workflow_id: str
+    ) -> str:
+        """
+        获取工作流状态
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            工作流状态信息
+        """
+        try:
+            result = workflow_manager.get_workflow_status(workflow_id)
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    @mcp.tool()
+    async def get_workflow_context(
+        workflow_id: str
+    ) -> str:
+        """
+        获取工作流上下文数据
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            工作流上下文信息
+        """
+        try:
+            result = workflow_manager.get_workflow_context(workflow_id)
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    @mcp.tool()
+    async def list_workflows() -> str:
+        """
+        列出所有工作流
+        
+        Returns:
+            所有工作流的列表
+        """
+        try:
+            result = workflow_manager.list_workflows()
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    @mcp.tool()
+    async def delete_workflow(
+        workflow_id: str
+    ) -> str:
+        """
+        删除工作流
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            删除结果
+        """
+        try:
+            result = workflow_manager.delete_workflow(workflow_id)
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    @mcp.tool()
+    async def pause_workflow(
+        workflow_id: str
+    ) -> str:
+        """
+        暂停工作流
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            操作结果
+        """
+        try:
+            result = workflow_manager.pause_workflow(workflow_id)
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": str(e)
+            }, ensure_ascii=False, indent=2)
+    
+    @mcp.tool()
+    async def resume_workflow(
+        workflow_id: str
+    ) -> str:
+        """
+        恢复工作流
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            操作结果
+        """
+        try:
+            result = workflow_manager.resume_workflow(workflow_id)
             return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:

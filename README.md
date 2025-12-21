@@ -172,5 +172,33 @@ def search_events(workflow_id: str) -> str:
 
 search_event 得到日志结果，如果想要AI自主分析，可能需要特别的返回值说明。
 
-例：
+# 架构设计
 
+项目目录结构：
+
+```
+hana-learncode/
+├── core/              # 核心功能函数（业务逻辑）
+│   ├── code_indexer.py      # 代码索引器
+│   ├── code_analyzer.py     # 代码分析器
+│   └── flowchart_generator.py  # 流程图生成器
+├── tool/              # MCP tool 定义
+│   └── create_tool.py        # 注册所有工具
+├── workflow/          # 工作流定义、实现
+│   ├── workflow_manager.py  # 工作流管理器
+│   ├── workflow_control.py  # 工作流控制
+│   ├── base_step.py         # 步骤基类
+│   └── workflow_steps.py    # 具体步骤实现
+├── resource/          # MCP resource 定义
+│   └── create_resource.py   # 注册所有资源
+├── prompt/            # MCP prompt 定义
+│   └── create_prompt.py     # 注册所有提示词
+└── main.py            # 主入口，注册所有组件
+```
+
+各模块说明：
+- **core**: 核心功能函数，包含代码分析、索引、流程图生成等业务逻辑
+- **tool**: MCP tool 定义，所有可执行的工具函数
+- **workflow**: 工作流定义、实现，包含工作流管理和步骤实现
+- **resource**: MCP resource 定义，提供只读数据资源
+- **prompt**: MCP prompt 定义，提供提示词模板
