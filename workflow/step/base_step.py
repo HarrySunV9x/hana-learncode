@@ -87,6 +87,11 @@ class BaseStep:
             lines.append(f"  执行 [{result.next_step}] 步骤")
         elif result.success:
             lines.append("✓ 工作流完成")
+            lines.append("")
+            lines.append("ℹ️  查询流程已结束，可以：")
+            lines.append("  • 向用户汇报结果")
+            lines.append("  • 或使用其他工具继续分析")
+            lines.append("  ⚠️  请勿重新 init（会导致重复扫描）")
         
         lines.append("═" * 40)
         
@@ -100,7 +105,23 @@ class BaseStep:
         # 1. 如果有 workflow，进行工作流相关校验
         if self.workflow is not None:
             if self.workflow.get_status().value != "running":
-                return self._format_error(f"工作流状态不正确，当前状态：{self.workflow.get_status().value}")
+                status = self.workflow.get_status().value
+                if status == "completed":
+                    return self._format_error(
+                        f"工作流已完成\n"
+                        f"  ℹ️  当前查询流程已结束\n"
+                        f"  ✅ 这是正常的，本次任务已完成\n"
+                        f"  ⚠️  请勿重新 init，直接结束或向用户汇报结果即可"
+                    )
+                elif status == "failed":
+                    return self._format_error(
+                        f"工作流执行失败\n"
+                        f"  ℹ️  上一步骤执行出错\n"
+                        f"  ✅ 可以检查错误信息并修正参数\n"
+                        f"  ⚠️  请勿自动重新 init"
+                    )
+                else:
+                    return self._format_error(f"工作流状态异常：{status}")
 
             # 校验当前步骤是否是 workflow 的当前步骤
             current_step = self.workflow.get_current_step()
@@ -120,12 +141,19 @@ class BaseStep:
         result = self.execute(context)
 
         # 5. 如果有 workflow，更新工作流状态
-        if self.workflow is not None and result.success:
-            if result.next_step:
-                self.workflow.set_expected_next_step(result.next_step)
-                self.workflow.jump_to_step(result.next_step)
+        if self.workflow is not None:
+            if result.success:
+                if result.next_step:
+                    self.workflow.set_expected_next_step(result.next_step)
+                    self.workflow.jump_to_step(result.next_step)
+                else:
+                    # 如果没有下一步，说明 workflow 完成
+                    next_step = self.workflow.next_step()
+                    if next_step is None:
+                        self.workflow.complete()
             else:
-                self.workflow.next_step()
+                # 步骤失败，workflow 也失败
+                self.workflow.fail()
         
         # 6. 格式化并返回结果
         return self.format_result(result)

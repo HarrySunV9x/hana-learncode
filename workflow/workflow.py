@@ -79,6 +79,25 @@ class Workflow:
     def set_status(self, status: WorkflowStatus):
         """ 设置工作流状态 """
         self.status = status
+    
+    def start(self):
+        """ 启动工作流 """
+        self.status = WorkflowStatus.RUNNING
+        self.start_time = time.time()
+    
+    def pause(self):
+        """ 暂停工作流 """
+        self.status = WorkflowStatus.PAUSED
+    
+    def complete(self):
+        """ 完成工作流 """
+        self.status = WorkflowStatus.COMPLETED
+        self.end_time = time.time()
+    
+    def fail(self):
+        """ 工作流失败 """
+        self.status = WorkflowStatus.FAILED
+        self.end_time = time.time()
 
     def get_workflow_status(self) -> Dict:
         """ 获取工作流状态 """

@@ -3,10 +3,6 @@ from pathlib import Path
 import json
 import uuid
 
-from core.code_indexer import CodeIndexer
-from core.code_analyzer import CodeAnalyzer
-from core.flowchart_generator import FlowchartGenerator
-
 # 导入步骤类
 from workflow.step.scan_repository import ScanRepositoryStep
 from workflow.step.search_functions import SearchFunctionsStep
@@ -14,6 +10,9 @@ from workflow.step.trace_function_flow import TraceFunctionFlowStep
 from workflow.step.analyze_concept import AnalyzeConceptStep
 from workflow.step.generate_flowchart import GenerateFlowchartStep
 
+from workflow.workflow_manager import workflow_manager
+
+from time import time
 # 全局上下文 - 用于在多个工具调用之间传递数据
 # session_id -> context
 sessions = {}
@@ -31,38 +30,92 @@ def get_or_create_session(session_id: Optional[str] = None) -> tuple[str, dict]:
 
 def register_tools(mcp):
     """注册所有工具到 MCP 服务器 - 每个工具对应一个具体步骤"""
-    
+    @mcp.tool()
+    async def init_learn_code_workflow(
+        code_path: str,
+        extensions: Optional[str] = None
+    ) -> str:
+        """
+        初始化学习代码工作流
+        
+        Args:
+            code_path: 代码仓库路径
+            extensions: 要扫描的文件扩展名，逗号分隔（可选，如：.py,.js,.go）
+        
+        Returns:
+            初始化结果和 session_id
+        """
+        # 创建会话
+        learn_code_session_id = f"learn_code_{int(time() * 1000)}"
+        session_id, context = get_or_create_session(learn_code_session_id)
+        
+        # 解析扩展名
+        ext_list = None
+        if extensions:
+            ext_list = [ext.strip() for ext in extensions.split(",")]
+        
+        # 创建工作流
+        learn_code_workflow = workflow_manager.create_workflow(session_id, "learn_code", "学习代码")
+        
+        # 添加第一步，扫描代码仓
+        learn_code_workflow.add_step(ScanRepositoryStep(learn_code_workflow, code_path, ext_list))
+        
+        # 启动工作流
+        learn_code_workflow.start()
+        
+        return f"""═══════════════════════════════════════════
+🎯 工作流初始化成功
+═══════════════════════════════════════════
+
+会话 ID: {session_id}
+代码路径: {code_path}
+扫描扩展名: {extensions or "默认"}
+
+接下来执行{workflow_manager.get_workflow(session_id).get_current_step().get_name()}
+
+═══════════════════════════════════════════"""
+
     @mcp.tool()
     async def scan_repository(
-        repo_path: str,
-        session_id: Optional[str] = None,
+        session_id: str,
+        repo_path: Optional[str] = None,
         extensions: Optional[str] = None
     ) -> str:
         """
         扫描代码仓库并建立索引
         
         Args:
-            repo_path: 代码仓库路径
-            session_id: 会话ID（可选，用于多步骤操作）
+            session_id: 会话ID
+            repo_path: 代码仓库路径（可选，使用初始化时的路径）
             extensions: 要扫描的文件扩展名，逗号分隔（可选，如：.py,.js,.go）
         
         Returns:
             扫描结果
         """
-        try:
-            # 获取或创建会话
-            sid, context = get_or_create_session(session_id)
-            
-            # 解析扩展名
-            ext_list = None
-            if extensions:
-                ext_list = [ext.strip() for ext in extensions.split(",")]
-            
-            # 创建并执行步骤
-            step = ScanRepositoryStep(None, repo_path, ext_list)
-            return step.run(context)
-        except Exception as e:
-            return f"❌ 扫描仓库失败：{str(e)}"
+        workflow = workflow_manager.get_workflow(session_id)
+        if not workflow:
+            return f"❌ scan_repository时，工作流不存在：{session_id}\n"
+        
+        _, context = get_or_create_session(session_id)
+        
+        # 将参数放入 context（如果提供）
+        if repo_path:
+            context["repo_path"] = repo_path
+        if extensions:
+            context["extensions"] = [ext.strip() for ext in extensions.split(",")]
+        
+        # 执行扫描
+        result = workflow.get_current_step().run(context)
+        
+        # 扫描完成后，添加后续步骤模板
+        # 这样 scan 返回的 next_step="search_functions" 就能找到对应步骤
+        if "indexer" in context:
+            workflow.add_step(SearchFunctionsStep(workflow, None))
+            workflow.add_step(TraceFunctionFlowStep(workflow, None))
+            workflow.add_step(AnalyzeConceptStep(workflow, None, None))
+            workflow.add_step(GenerateFlowchartStep(workflow, "call_tree"))
+        
+        return result
     
     @mcp.tool()
     async def search_functions(
@@ -79,18 +132,29 @@ def register_tools(mcp):
         Returns:
             搜索结果
         """
-        try:
-            # 获取会话
-            if session_id not in sessions:
-                return f"❌ 会话不存在：{session_id}\n请先执行 scan_repository"
-
-            context = sessions[session_id]
-
-            # 创建并执行步骤
-            step = SearchFunctionsStep(None, keyword)
-            return step.run(context)
-        except Exception as e:
-            return f"❌ 搜索函数失败：{str(e)}"
+        workflow = workflow_manager.get_workflow(session_id)
+        if not workflow:
+            return f"❌ search_functions时工作流不存在：{session_id}\n"
+        
+        _, context = get_or_create_session(session_id)
+        
+        # 将参数放入 context
+        if keyword:
+            context["search_keyword"] = keyword
+        
+        # 检查当前步骤是否是 search_functions
+        current_step = workflow.get_current_step()
+        if current_step and current_step.get_name() == "search_functions":
+            # 第一次调用，使用已有的 search_functions 步骤
+            return current_step.run(context)
+        else:
+            # 不是第一次，添加新的 search 步骤
+            step_index = len([s for s in workflow.steps if "search_functions" in s.get_name()])
+            new_step = SearchFunctionsStep(workflow, keyword)
+            new_step.name = f"search_functions_{step_index}"
+            workflow.add_step(new_step)
+            workflow.jump_to_step(new_step.name)
+            return new_step.run(context)
     
     @mcp.tool()
     async def trace_function_flow(
@@ -109,18 +173,31 @@ def register_tools(mcp):
         Returns:
             追踪结果
         """
-        try:
-            # 获取会话
-            if session_id not in sessions:
-                return f"❌ 会话不存在：{session_id}\n请先执行 scan_repository"
-
-            context = sessions[session_id]
-
-            # 创建并执行步骤
-            step = TraceFunctionFlowStep(None, function_name, max_depth)
-            return step.run(context)
-        except Exception as e:
-            return f"❌ 追踪函数流程失败：{str(e)}"
+        workflow = workflow_manager.get_workflow(session_id)
+        if not workflow:
+            return f"❌ trace_function_flow时工作流不存在：{session_id}\n"
+        
+        _, context = get_or_create_session(session_id)
+ 
+        # 将参数放入 context
+        if function_name:
+            context["trace_function"] = function_name
+        if max_depth != 3:  # 只在非默认值时设置
+            context["max_depth"] = max_depth
+        
+        # 检查当前步骤是否是 trace_function_flow
+        current_step = workflow.get_current_step()
+        if current_step and current_step.get_name() == "trace_function_flow":
+            # 第一次调用，使用已有的步骤
+            return current_step.run(context)
+        else:
+            # 添加新的 trace 步骤
+            step_index = len([s for s in workflow.steps if "trace_function_flow" in s.get_name()])
+            new_step = TraceFunctionFlowStep(workflow, function_name, max_depth)
+            new_step.name = f"trace_function_flow_{step_index}"
+            workflow.add_step(new_step)
+            workflow.jump_to_step(new_step.name)
+            return new_step.run(context)
     
     @mcp.tool()
     async def analyze_concept(
@@ -139,21 +216,29 @@ def register_tools(mcp):
         Returns:
             分析结果
         """
-        try:
-            # 获取会话
-            if session_id not in sessions:
-                return f"❌ 会话不存在：{session_id}\n请先执行 scan_repository"
-
-            context = sessions[session_id]
-
-            # 解析关键词
-            keyword_list = [kw.strip() for kw in keywords.split(",")]
-
-            # 创建并执行步骤
-            step = AnalyzeConceptStep(None, concept, keyword_list)
-            return step.run(context)
-        except Exception as e:
-            return f"❌ 分析概念失败：{str(e)}"
+        workflow = workflow_manager.get_workflow(session_id)
+        if not workflow:
+            return f"❌ analyze_concept时工作流不存在：{session_id}\n"
+        
+        _, context = get_or_create_session(session_id)
+ 
+        # 将参数放入 context
+        context["concept"] = concept
+        context["keywords"] = [kw.strip() for kw in keywords.split(",")]
+        
+        # 检查当前步骤是否是 analyze_concept
+        current_step = workflow.get_current_step()
+        if current_step and current_step.get_name() == "analyze_concept":
+            # 第一次调用，使用已有的步骤
+            return current_step.run(context)
+        else:
+            # 添加新的分析步骤
+            step_index = len([s for s in workflow.steps if "analyze_concept" in s.get_name()])
+            new_step = AnalyzeConceptStep(workflow, concept, keywords)
+            new_step.name = f"analyze_concept_{step_index}"
+            workflow.add_step(new_step)
+            workflow.jump_to_step(new_step.name)
+            return new_step.run(context)
     
     @mcp.tool()
     async def generate_flowchart(
@@ -172,133 +257,28 @@ def register_tools(mcp):
         Returns:
             流程图（Mermaid格式）
         """
-        try:
-            # 获取会话
-            if session_id not in sessions:
-                return f"❌ 会话不存在：{session_id}\n请先执行相应的分析步骤"
-
-            context = sessions[session_id]
-
-            # 创建并执行步骤
-            step = GenerateFlowchartStep(None, chart_type or "call_tree", direction)
-            return step.run(context)
-        except Exception as e:
-            return f"❌ 生成流程图失败：{str(e)}"
-    
-    @mcp.tool()
-    async def list_sessions() -> str:
-        """
-        列出所有会话
+        workflow = workflow_manager.get_workflow(session_id)
+        if not workflow:
+            return f"❌ generate_flowchart时工作流不存在：{session_id}\n"
         
-        Returns:
-            所有会话列表
-        """
-        if not sessions:
-            return "暂无会话"
+        _, context = get_or_create_session(session_id)
+ 
+        # 将参数放入 context
+        if chart_type:
+            context["chart_type"] = chart_type
+        if direction != "TD":  # 只在非默认值时设置
+            context["direction"] = direction
         
-        result = f"""═══════════════════════════════════════════
-📋 所有会话 (共 {len(sessions)} 个)
-═══════════════════════════════════════════
-
-"""
-        for sid, context in sessions.items():
-            has_indexer = "indexer" in context
-            has_flow = "function_flow" in context
-            has_concept = "concept_analysis" in context
-            has_chart = "flowchart" in context
-            
-            result += f"""
-会话ID: {sid}
-  • 已扫描: {'✓' if has_indexer else '✗'}
-  • 已追踪函数: {'✓' if has_flow else '✗'}
-  • 已分析概念: {'✓' if has_concept else '✗'}
-  • 已生成图表: {'✓' if has_chart else '✗'}
----"""
-        
-        result += "\n═══════════════════════════════════════════"
-        
-        return result
-    
-    @mcp.tool()
-    async def get_session_info(session_id: str) -> str:
-        """
-        获取会话详细信息
-        
-        Args:
-            session_id: 会话ID
-        
-        Returns:
-            会话信息
-        """
-        if session_id not in sessions:
-            return f"❌ 会话不存在：{session_id}"
-        
-        context = sessions[session_id]
-        
-        result = f"""═══════════════════════════════════════════
-📊 会话信息
-═══════════════════════════════════════════
-
-会话 ID: {session_id}
-
-"""
-        
-        # 扫描结果
-        if "scan_result" in context:
-            scan = context["scan_result"]
-            result += f"""📁 扫描结果：
-  • 文件数: {scan.get('total_files', 0)}
-  • 扩展名: {scan.get('extensions', {})}
-
-"""
-        
-        # 索引结果
-        if "index_result" in context:
-            index = context["index_result"]
-            result += f"""📑 索引结果：
-  • 函数数: {index.get('total_functions', 0)}
-  • 结构体/类数: {index.get('total_structs', 0)}
-
-"""
-        
-        # 搜索结果
-        if "found_functions" in context:
-            funcs = context["found_functions"]
-            result += f"""🔍 搜索结果：
-  • 找到函数数: {len(funcs)}
-
-"""
-        
-        # 追踪结果
-        if "function_flow" in context:
-            flow = context["function_flow"]
-            result += f"""🔄 函数追踪：
-  • 函数: {flow.get('function', '')}
-  • 文件: {flow.get('file', '')}
-  • 行号: {flow.get('line', 0)}
-
-"""
-        
-        # 概念分析结果
-        if "concept_analysis" in context:
-            analysis = context["concept_analysis"]
-            result += f"""💡 概念分析：
-  • 概念: {analysis.get('concept', '')}
-  • 相关函数数: {analysis.get('total_functions', 0)}
-
-"""
-        
-        # 流程图
-        if "flowchart" in context:
-            chart_info = context.get("chart_info", {})
-            flowchart = context["flowchart"]
-            result += f"""📊 流程图：
-  • 类型: {chart_info.get('type', 'unknown')}
-  • 格式: Mermaid
-  • 大小: {len(flowchart)} 字符
-
-"""
-        
-        result += "═══════════════════════════════════════════"
-        
-        return result
+        # 检查当前步骤是否是 generate_flowchart
+        current_step = workflow.get_current_step()
+        if current_step and current_step.get_name() == "generate_flowchart":
+            # 第一次调用，使用已有的步骤
+            return current_step.run(context)
+        else:
+            # 添加新的生成流程图步骤
+            step_index = len([s for s in workflow.steps if "generate_flowchart" in s.get_name()])
+            new_step = GenerateFlowchartStep(workflow, chart_type or "call_tree")
+            new_step.name = f"generate_flowchart_{step_index}"
+            workflow.add_step(new_step)
+            workflow.jump_to_step(new_step.name)
+            return new_step.run(context)

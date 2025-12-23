@@ -51,7 +51,14 @@ class SearchFunctionsStep(BaseStep):
                 if len(functions) == 0:
                     return StepResult(
                         success=True,
-                        message=f"未找到包含关键词 '{keyword}' 的函数",
+                        message=f"未找到包含关键词 '{keyword}' 的函数\n"
+                                f"  ℹ️  这是正常的搜索结果，代码库中可能确实没有相关函数\n"
+                                f"  ✅ 可以尝试：\n"
+                                f"     - 使用其他关键词搜索\n"
+                                f"     - 使用 trace_function_flow 追踪已知函数\n"
+                                f"     - 使用 analyze_concept 分析代码概念\n"
+                                f"     - 或者直接结束，向用户汇报结果\n"
+                                f"  ⚠️  请勿重新 init，会导致重复扫描代码库",
                         data={"keyword": keyword, "count": 0},
                         next_step=None  # 没有找到函数，结束流程
                     )
