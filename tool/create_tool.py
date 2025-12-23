@@ -29,7 +29,6 @@ def get_or_create_session(session_id: Optional[str] = None) -> tuple[str, dict]:
     sessions[new_session_id] = {}
     return new_session_id, sessions[new_session_id]
 
-# TODO: 当前步骤未基于base_step实现，后续需要修改
 def register_tools(mcp):
     """注册所有工具到 MCP 服务器 - 每个工具对应一个具体步骤"""
     
@@ -61,32 +60,7 @@ def register_tools(mcp):
             
             # 创建并执行步骤
             step = ScanRepositoryStep(None, repo_path, ext_list)
-            result = step.execute(context)
-            
-            # 保存上下文
-            sessions[sid] = context
-            
-            if result.success:
-                scan_data = result.data
-                return f"""═══════════════════════════════════════════
-📁 扫描仓库成功
-═══════════════════════════════════════════
-
-✅ {result.message}
-
-📊 统计信息：
-  • 文件总数: {scan_data.get('total_files', 0)}
-  • 函数总数: {scan_data.get('total_functions', 0)}
-  • 结构体/类总数: {scan_data.get('total_structs', 0)}
-  • 文件类型: {scan_data.get('extensions', {})}
-
-🔖 会话ID: {sid}
-  （后续步骤请使用此ID）
-
-═══════════════════════════════════════════"""
-            else:
-                return f"❌ {result.message}"
-                
+            return step.run(context)
         except Exception as e:
             return f"❌ 扫描仓库失败：{str(e)}"
     
@@ -109,41 +83,12 @@ def register_tools(mcp):
             # 获取会话
             if session_id not in sessions:
                 return f"❌ 会话不存在：{session_id}\n请先执行 scan_repository"
-            
+
             context = sessions[session_id]
-            
+
             # 创建并执行步骤
             step = SearchFunctionsStep(None, keyword)
-            result = step.execute(context)
-            
-            # 保存上下文
-            sessions[session_id] = context
-            
-            if result.success:
-                data = result.data
-                funcs = context.get("found_functions", [])
-                
-                output = f"""═══════════════════════════════════════════
-🔍 搜索函数成功
-═══════════════════════════════════════════
-
-✅ {result.message}
-
-📋 找到的函数：
-"""
-                for i, func in enumerate(funcs[:20], 1):
-                    output += f"  {i}. {func['name']} ({func.get('file', 'unknown')}:{func.get('line', 0)})\n"
-                
-                if len(funcs) > 20:
-                    output += f"\n... 还有 {len(funcs) - 20} 个函数未显示\n"
-                
-                output += f"\n🔖 会话ID: {session_id}\n"
-                output += "\n═══════════════════════════════════════════"
-                
-                return output
-            else:
-                return f"❌ {result.message}"
-                
+            return step.run(context)
         except Exception as e:
             return f"❌ 搜索函数失败：{str(e)}"
     
@@ -168,38 +113,12 @@ def register_tools(mcp):
             # 获取会话
             if session_id not in sessions:
                 return f"❌ 会话不存在：{session_id}\n请先执行 scan_repository"
-            
+
             context = sessions[session_id]
-            
+
             # 创建并执行步骤
             step = TraceFunctionFlowStep(None, function_name, max_depth)
-            result = step.execute(context)
-            
-            # 保存上下文
-            sessions[session_id] = context
-            
-            if result.success:
-                data = result.data
-                return f"""═══════════════════════════════════════════
-🔄 追踪函数流程成功
-═══════════════════════════════════════════
-
-✅ {result.message}
-
-📍 函数信息：
-  • 函数名: {data.get('function', '')}
-  • 文件: {data.get('file', '')}
-  • 行号: {data.get('line', 0)}
-  • 追踪深度: {data.get('depth', 0)}
-
-🔖 会话ID: {session_id}
-
-💡 提示：使用 generate_flowchart 生成可视化流程图
-
-═══════════════════════════════════════════"""
-            else:
-                return f"❌ {result.message}"
-                
+            return step.run(context)
         except Exception as e:
             return f"❌ 追踪函数流程失败：{str(e)}"
     
@@ -224,40 +143,15 @@ def register_tools(mcp):
             # 获取会话
             if session_id not in sessions:
                 return f"❌ 会话不存在：{session_id}\n请先执行 scan_repository"
-            
+
             context = sessions[session_id]
-            
+
             # 解析关键词
             keyword_list = [kw.strip() for kw in keywords.split(",")]
-            
+
             # 创建并执行步骤
             step = AnalyzeConceptStep(None, concept, keyword_list)
-            result = step.execute(context)
-            
-            # 保存上下文
-            sessions[session_id] = context
-            
-            if result.success:
-                data = result.data
-                return f"""═══════════════════════════════════════════
-💡 概念分析成功
-═══════════════════════════════════════════
-
-✅ {result.message}
-
-📊 分析结果：
-  • 概念: {data.get('concept', '')}
-  • 关键词: {data.get('keywords', [])}
-  • 相关函数数: {data.get('total_functions', 0)}
-
-🔖 会话ID: {session_id}
-
-💡 提示：使用 generate_flowchart 生成概念流程图
-
-═══════════════════════════════════════════"""
-            else:
-                return f"❌ {result.message}"
-                
+            return step.run(context)
         except Exception as e:
             return f"❌ 分析概念失败：{str(e)}"
     
@@ -282,41 +176,12 @@ def register_tools(mcp):
             # 获取会话
             if session_id not in sessions:
                 return f"❌ 会话不存在：{session_id}\n请先执行相应的分析步骤"
-            
+
             context = sessions[session_id]
-            
+
             # 创建并执行步骤
             step = GenerateFlowchartStep(None, chart_type or "call_tree", direction)
-            result = step.execute(context)
-            
-            # 保存上下文
-            sessions[session_id] = context
-            
-            if result.success:
-                flowchart = context.get("flowchart", "")
-                chart_info = context.get("chart_info", {})
-                
-                return f"""═══════════════════════════════════════════
-📊 生成流程图成功
-═══════════════════════════════════════════
-
-✅ {result.message}
-
-📈 流程图信息：
-  • 类型: {chart_info.get('type', 'unknown')}
-  • 格式: Mermaid
-  • 方向: {direction}
-
-```mermaid
-{flowchart}
-```
-
-🔖 会话ID: {session_id}
-
-═══════════════════════════════════════════"""
-            else:
-                return f"❌ {result.message}"
-                
+            return step.run(context)
         except Exception as e:
             return f"❌ 生成流程图失败：{str(e)}"
     

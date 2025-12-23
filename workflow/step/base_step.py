@@ -97,36 +97,35 @@ class BaseStep:
         执行步骤
         返回：格式化的字符串结果（用于 MCP tool）
         """
-        # 1. 校验 workflow 状态
-        # 使用字符串比较避免循环导入
-        if self.workflow.get_status().value != "running":
-            return self._format_error(f"工作流状态不正确，当前状态：{self.workflow.get_status().value}")
-        
-        # 2. 校验当前步骤是否是 workflow 的当前步骤
-        current_step = self.workflow.get_current_step()
-        if current_step != self:
-            current_name = current_step.get_name() if current_step else "None"
-            return self._format_error(
-                f"工作流步骤不匹配\n"
-                f"  • 当前应执行步骤：{current_name}\n"
-                f"  • 实际尝试执行：{self.name}"
-            )
+        # 1. 如果有 workflow，进行工作流相关校验
+        if self.workflow is not None:
+            if self.workflow.get_status().value != "running":
+                return self._format_error(f"工作流状态不正确，当前状态：{self.workflow.get_status().value}")
+
+            # 校验当前步骤是否是 workflow 的当前步骤
+            current_step = self.workflow.get_current_step()
+            if current_step != self:
+                current_name = current_step.get_name() if current_step else "None"
+                return self._format_error(
+                    f"工作流步骤不匹配\n"
+                    f"  • 当前应执行步骤：{current_name}\n"
+                    f"  • 实际尝试执行：{self.name}"
+                )
         
         # 3. 校验步骤参数
         if not self.validate_parameters(context):
             return self._format_error("参数校验失败，请检查输入参数")
-        
+
         # 4. 执行步骤
         result = self.execute(context)
-        
-        # 5. 如果执行成功且指定了下一步，则更新 workflow 状态
-        if result.success and result.next_step:
-            self.workflow.set_expected_next_step(result.next_step)
-            # 可以选择跳转到指定步骤
-            self.workflow.jump_to_step(result.next_step)
-        elif result.success:
-            # 没有指定下一步，按顺序前进
-            self.workflow.next_step()
+
+        # 5. 如果有 workflow，更新工作流状态
+        if self.workflow is not None and result.success:
+            if result.next_step:
+                self.workflow.set_expected_next_step(result.next_step)
+                self.workflow.jump_to_step(result.next_step)
+            else:
+                self.workflow.next_step()
         
         # 6. 格式化并返回结果
         return self.format_result(result)
