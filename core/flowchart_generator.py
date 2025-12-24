@@ -1,13 +1,17 @@
 """流程图生成器 - 生成 Mermaid 格式的流程图"""
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+
+from core.logger import get_logger
+
+logger = get_logger("flowchart_generator")
 
 
 class FlowchartGenerator:
     """流程图生成器，生成 Mermaid 格式的流程图"""
     
     def __init__(self):
-        self.node_counter = 0
-        self.node_map = {}
+        self.node_counter: int = 0
+        self.node_map: Dict[str, str] = {}
     
     def _get_node_id(self, name: str) -> str:
         """获取或创建节点 ID"""
@@ -16,15 +20,35 @@ class FlowchartGenerator:
             self.node_map[name] = f"node{self.node_counter}"
         return self.node_map[name]
     
-    def _sanitize_label(self, text: str) -> str:
-        """清理标签文本，避免 Mermaid 语法错误"""
+    def _sanitize_label(self, text: str, max_length: int = 50) -> str:
+        """
+        清理标签文本，避免 Mermaid 语法错误
+        
+        Args:
+            text: 原始文本
+            max_length: 最大长度
+        
+        Returns:
+            清理后的文本
+        """
         # 移除或转义特殊字符
         text = text.replace('"', "'")
         text = text.replace('\n', ' ')
         text = text.replace('\r', '')
-        return text[:50]  # 限制长度
+        text = text.replace('(', '[')
+        text = text.replace(')', ']')
+        return text[:max_length]
     
-    def generate_call_tree_flowchart(self, call_tree: Dict, direction: str = "TD") -> str:
+    def _reset(self):
+        """重置生成器状态"""
+        self.node_counter = 0
+        self.node_map = {}
+    
+    def generate_call_tree_flowchart(
+        self, 
+        call_tree: Dict[str, Any], 
+        direction: str = "TD"
+    ) -> str:
         """
         从调用树生成流程图
         
@@ -35,8 +59,9 @@ class FlowchartGenerator:
         Returns:
             Mermaid 格式的流程图代码
         """
-        self.node_counter = 0
-        self.node_map = {}
+        self._reset()
+        
+        logger.debug(f"生成调用树流程图，方向: {direction}")
         
         mermaid = [f"graph {direction}"]
         
@@ -45,7 +70,12 @@ class FlowchartGenerator:
         
         return "\n".join(mermaid)
     
-    def _add_call_tree_nodes(self, node: Dict, mermaid: List[str], parent_id: Optional[str] = None):
+    def _add_call_tree_nodes(
+        self, 
+        node: Dict[str, Any], 
+        mermaid: List[str], 
+        parent_id: Optional[str] = None
+    ):
         """递归添加调用树节点"""
         name = node.get("name", "unknown")
         file = node.get("file", "")
@@ -53,7 +83,10 @@ class FlowchartGenerator:
         
         # 创建节点
         node_id = self._get_node_id(f"{file}:{name}")
-        label = f"{name}\\n({file.split('/')[-1]}:{line})"
+        
+        # 文件名简化
+        file_name = file.split('/')[-1] if file else ""
+        label = f"{name}\\n({file_name}:{line})" if file_name else name
         label = self._sanitize_label(label)
         
         # 根节点使用不同的样式
@@ -69,7 +102,11 @@ class FlowchartGenerator:
         for call in calls:
             self._add_call_tree_nodes(call, mermaid, node_id)
     
-    def generate_function_path_flowchart(self, paths: List[List[str]], direction: str = "LR") -> str:
+    def generate_function_path_flowchart(
+        self, 
+        paths: List[List[str]], 
+        direction: str = "LR"
+    ) -> str:
         """
         从函数调用路径生成流程图
         
@@ -83,8 +120,9 @@ class FlowchartGenerator:
         if not paths:
             return "graph LR\n    A[未找到路径]"
         
-        self.node_counter = 0
-        self.node_map = {}
+        self._reset()
+        
+        logger.debug(f"生成路径流程图，共 {len(paths)} 条路径")
         
         mermaid = [f"graph {direction}"]
         
@@ -93,7 +131,7 @@ class FlowchartGenerator:
             if not path:
                 continue
             
-            # 添加路径注释
+            # 添加路径子图（多条路径时）
             if len(paths) > 1:
                 mermaid.append(f"    subgraph Path{path_idx + 1}")
             
@@ -113,7 +151,11 @@ class FlowchartGenerator:
         
         return "\n".join(mermaid)
     
-    def generate_concept_flowchart(self, analysis: Dict, direction: str = "TD") -> str:
+    def generate_concept_flowchart(
+        self, 
+        analysis: Dict[str, Any], 
+        direction: str = "TD"
+    ) -> str:
         """
         从概念分析生成流程图
         
@@ -130,8 +172,9 @@ class FlowchartGenerator:
         if not functions:
             return f"graph {direction}\n    A[{concept}]\n    B[未找到相关函数]"
         
-        self.node_counter = 0
-        self.node_map = {}
+        self._reset()
+        
+        logger.debug(f"生成概念流程图: {concept}, 函数数: {len(functions)}")
         
         mermaid = [f"graph {direction}"]
         
@@ -141,7 +184,7 @@ class FlowchartGenerator:
         mermaid.append(f"    style {concept_id} fill:#ff9,stroke:#333,stroke-width:4px")
         
         # 按文件分组
-        files = {}
+        files: Dict[str, List[Dict]] = {}
         for func in functions:
             file = func.get("file", "unknown")
             if file not in files:
@@ -151,14 +194,15 @@ class FlowchartGenerator:
         # 为每个文件创建子图
         for file_idx, (file, file_funcs) in enumerate(files.items()):
             file_name = file.split('/')[-1]
-            mermaid.append(f"    subgraph {self._sanitize_label(file_name).replace(' ', '_')}")
+            safe_name = self._sanitize_label(file_name).replace(' ', '_').replace('.', '_')
+            mermaid.append(f"    subgraph {safe_name}")
             
             for func in file_funcs:
                 func_name = func.get("name", "unknown")
                 line = func.get("line", 0)
                 
                 node_id = self._get_node_id(f"{file}:{func_name}")
-                label = f"{func_name}\\n(L{line})"
+                label = f"{func_name}\\n[L{line}]"
                 mermaid.append(f'    {node_id}["{self._sanitize_label(label)}"]')
                 mermaid.append(f"    {concept_id} -.-> {node_id}")
             
@@ -166,7 +210,11 @@ class FlowchartGenerator:
         
         return "\n".join(mermaid)
     
-    def generate_simple_flowchart(self, steps: List[str], direction: str = "TD") -> str:
+    def generate_simple_flowchart(
+        self, 
+        steps: List[str], 
+        direction: str = "TD"
+    ) -> str:
         """
         生成简单的步骤流程图
         
@@ -180,8 +228,7 @@ class FlowchartGenerator:
         if not steps:
             return "graph TD\n    A[空流程]"
         
-        self.node_counter = 0
-        self.node_map = {}
+        self._reset()
         
         mermaid = [f"graph {direction}"]
         
@@ -207,8 +254,11 @@ class FlowchartGenerator:
         
         return "\n".join(mermaid)
     
-    def generate_module_dependency_graph(self, includes: Dict[str, List[str]], 
-                                        direction: str = "LR") -> str:
+    def generate_module_dependency_graph(
+        self, 
+        includes: Dict[str, List[str]],
+        direction: str = "LR"
+    ) -> str:
         """
         生成模块依赖关系图
         
@@ -222,30 +272,35 @@ class FlowchartGenerator:
         if not includes:
             return "graph LR\n    A[无依赖关系]"
         
-        self.node_counter = 0
-        self.node_map = {}
+        self._reset()
+        
+        logger.debug(f"生成依赖图，模块数: {len(includes)}")
         
         mermaid = [f"graph {direction}"]
+        declared_nodes = set()
         
         # 创建所有节点和边
         for file, deps in includes.items():
             file_name = file.split('/')[-1]
             file_id = self._get_node_id(file)
             
-            mermaid.append(f'    {file_id}["{self._sanitize_label(file_name)}"]')
+            if file_id not in declared_nodes:
+                mermaid.append(f'    {file_id}["{self._sanitize_label(file_name)}"]')
+                declared_nodes.add(file_id)
             
             for dep in deps:
                 dep_name = dep.split('/')[-1]
                 dep_id = self._get_node_id(dep)
                 
-                if dep_id not in [line.split('[')[0].strip() for line in mermaid if '[' in line]:
+                if dep_id not in declared_nodes:
                     mermaid.append(f'    {dep_id}["{self._sanitize_label(dep_name)}"]')
+                    declared_nodes.add(dep_id)
                 
                 mermaid.append(f"    {file_id} --> {dep_id}")
         
         return "\n".join(mermaid)
     
-    def generate_sequence_diagram(self, call_sequence: List[Dict]) -> str:
+    def generate_sequence_diagram(self, call_sequence: List[Dict[str, Any]]) -> str:
         """
         生成时序图
         
@@ -258,6 +313,8 @@ class FlowchartGenerator:
         if not call_sequence:
             return "sequenceDiagram\n    participant A\n    A->>A: Empty"
         
+        logger.debug(f"生成时序图，调用数: {len(call_sequence)}")
+        
         mermaid = ["sequenceDiagram"]
         
         # 收集所有参与者
@@ -267,16 +324,49 @@ class FlowchartGenerator:
             participants.add(call.get("callee", "Unknown"))
         
         # 声明参与者
-        for participant in participants:
-            mermaid.append(f"    participant {self._sanitize_label(participant).replace(' ', '_')}")
+        for participant in sorted(participants):
+            safe_name = self._sanitize_label(participant).replace(' ', '_')
+            mermaid.append(f"    participant {safe_name}")
         
         # 添加调用序列
         for call in call_sequence:
             caller = self._sanitize_label(call.get("caller", "Unknown")).replace(' ', '_')
             callee = self._sanitize_label(call.get("callee", "Unknown")).replace(' ', '_')
-            message = self._sanitize_label(call.get("message", "call"))
+            message = self._sanitize_label(call.get("message", "call"), 30)
             
             mermaid.append(f"    {caller}->>{callee}: {message}")
         
         return "\n".join(mermaid)
-
+    
+    def generate_class_diagram(self, classes: List[Dict[str, Any]]) -> str:
+        """
+        生成类图
+        
+        Args:
+            classes: 类信息列表，每项包含 name, methods, attributes
+        
+        Returns:
+            Mermaid 格式的类图代码
+        """
+        if not classes:
+            return "classDiagram\n    class Empty"
+        
+        logger.debug(f"生成类图，类数: {len(classes)}")
+        
+        mermaid = ["classDiagram"]
+        
+        for cls in classes:
+            class_name = self._sanitize_label(cls.get("name", "Unknown"), 30)
+            mermaid.append(f"    class {class_name} {{")
+            
+            # 添加属性
+            for attr in cls.get("attributes", []):
+                mermaid.append(f"        +{self._sanitize_label(attr, 40)}")
+            
+            # 添加方法
+            for method in cls.get("methods", []):
+                mermaid.append(f"        +{self._sanitize_label(method, 40)}()")
+            
+            mermaid.append("    }")
+        
+        return "\n".join(mermaid)
